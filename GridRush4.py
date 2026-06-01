@@ -14,17 +14,14 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-# --- FIXED HELPER FUNCTIONS ---
+# --- HELPER FUNCTIONS ---
 def get_game_state():
     res = supabase.table("game_state").select("*").eq("id", 1).execute()
-    # BUG FIX: Extract the first dictionary element from the list wrapper safely
-    if res.data and len(res.data) > 0:
-        return res.data[0] 
-    return None
+    return res.data[0] if res.data else None
 
 def get_players():
     res = supabase.table("players").select("*").execute()
-    return res.data if res.data else []
+    return res.data
 
 def register_player(username):
     supabase.table("players").upsert({
@@ -45,9 +42,6 @@ def process_round(event_name):
     players = get_players()
     state = get_game_state()
     
-    if not state:
-        return
-        
     for p in players:
         f_count = p["fossil_count"]
         g_count = p["green_count"]
@@ -97,51 +91,39 @@ username = st.sidebar.text_input("Enter Username/Access Code", "").strip()
 
 state = get_game_state()
 
-# Critical check to ensure database communications are functioning
-if not state:
-    st.error("🚨 Configuration Error: The server cannot fetch data from your 'game_state' table.")
-    st.info("Please verify that your Supabase credentials match and that your database contains the row id = 1.")
-elif not username:
+if not username:
     st.info("👋 Enter a username in the sidebar to join the session.")
 else:
     # --- GAME MASTER DASHBOARD ---
-    if role == "Game Master":
-        if username == "admin-gm-99": # GM password Protection
-            st.header("👑 Game Master Control Panel")
-            st.subheader(f"Current Round Status: {state['current_round']} / 5")
-            
-            players = get_players()
-            submitted_count = sum(1 for p in players if p["submitted_choice"] is not None)
-            st.metric("Players Ready", f"{submitted_count} / {len(players)}")
-            
-            if state["game_active"]:
-                if st.button("🎲 Roll Dice & Process Round", type="primary"):
-                    rolled_event = random.choice([k for k in EVENTS.keys() if k != "None"])
-                    process_round(rolled_event)
-                    st.success(f"Rolled Event: {rolled_event}! Data Updated.")
-                    st.rerun()
-            else:
-                st.error("🏁 Game is finished!")
-                if st.button("🔄 Reset Global Game"):
-                    supabase.table("game_state").update({"current_round": 1, "current_event": "None", "game_active": True}).eq("id", 1).execute()
-                    # Delete all players to wipe the old match clean
-                    supabase.table("players").delete().neq("username", "keep_schema").execute()
-                    st.rerun()
-
-            # GM Scoreboard View
-            st.write("### 📊 Live Leaderboard")
-            if players:
-                st.dataframe(players)
-            else:
-                st.caption("No players registered yet.")
+    if role == "Game Master" and username == "admin-gm-99": # Simple GM password Protection
+        st.header("👑 Game Master Control Panel")
+        st.subheader(f"Current Round Status: {state['current_round']} / 5")
+        
+        players = get_players()
+        submitted_count = sum(1 for p in players if p["submitted_choice"] is not None)
+        st.metric("Players Ready", f"{submitted_count} / {len(players)}")
+        
+        if state["game_active"]:
+            if st.button("🎲 Roll Dice & Process Round", type="primary"):
+                rolled_event = random.choice([k for k in EVENTS.keys() if k != "None"])
+                process_round(rolled_event)
+                st.success(f"Rolled Event: {rolled_event}! Data Updated.")
+                st.rerun()
         else:
-            st.error("❌ Invalid Game Master access code!")
+            st.error("🏁 Game is finished!")
+            if st.button("🔄 Reset Global Game"):
+                supabase.table("game_state").update({"current_round": 1, "current_event": "None", "game_active": True}).eq("id", 1).execute()
+                supabase.table("players").delete().neq("username", "keep_schema").execute()
+                st.rerun()
+
+        # GM Scoreboard View
+        st.write("### 📊 Live Leaderboard")
+        st.dataframe(players)
 
     # --- PLAYER INTERFACE ---
     elif role == "Player":
-        players_list = get_players()
-        player_data = next((p for p in players_list if p["username"] == username), None)
-        
+        # Register user if not exists
+        player_data = next((p for p in get_players() if p["username"] == username), None)
         if not player_data:
             register_player(username)
             st.rerun()
@@ -189,4 +171,3 @@ else:
             st.header("🏆 Final Game Results!")
             st.metric(label="Your Final Metric Score", value=f"{final_score:,.0f} pts")
             st.write(f"Final Balance: ${player_data['balance']:,} | Final Stability Ratio: {stability:.0f}%")
-
